@@ -32,8 +32,9 @@ deploy/               container deployment and the agent installer
 
 ## Build
 
-The host needs only bash, curl and tar: Go is fetched into `.toolchain/` and
-pinned by `scripts/bootstrap-go.sh`.
+Only needed to work on needle itself; installing either end does not require
+it. The host needs only bash, curl and tar: Go is fetched into `.toolchain/`
+and pinned by `scripts/bootstrap-go.sh`.
 
 ```shell
 ./scripts/build.sh              # host architecture
@@ -61,17 +62,18 @@ GitHub Actions; nothing is compiled on the deployment host.
 | `ghcr.io/justypist/needle:sha-abc1234` | one specific commit |
 
 ```shell
-./deploy/install-server.sh --dest ~/.compose/needle --domain needle.dev.typist.cc
+curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/install-server.sh \
+  | sh -s -- --dest ~/.compose/needle --domain needle.dev.typist.cc
 ```
 
-That writes a compose root — `compose.yaml`, `.env` with freshly generated
-credentials, and the `backup.sh` / `restore.sh` pair from the `~/.compose`
-convention — then pulls and starts it. Re-running it updates the compose file
-and keeps the existing `.env`. `--no-start` assembles without starting, and
-`--tag` pins a version instead of tracking `latest`.
+The installer fetches `compose.yaml` and the `backup.sh` / `restore.sh` pair,
+writes a `.env` with freshly generated credentials, and pulls and starts the
+container. It needs only `curl` and `docker`. Re-running it refreshes
+`compose.yaml` and keeps the existing `.env`, so it is also the update path.
+`--no-start` assembles without starting; `--tag 1.2.3` pins a version instead
+of tracking `latest`.
 
-To assemble by hand instead, copy `deploy/compose.yaml` and `deploy/.env.example`
-into the target directory, fill in the credentials, and run `docker compose up -d`.
+Run it from a clone instead and it uses the files on disk: `./deploy/install-server.sh ...`.
 
 The container runs from a `scratch` image as uid 65534, with `read_only: true`,
 `cap_drop: ALL`, `no-new-privileges` and a writable `/data` volume as its only
@@ -93,19 +95,23 @@ caddy instance watching the `public` network.
 
 ### Releases
 
-Pushing to `main` publishes `latest` and `sha-<commit>`. Pushing a `vX.Y.Z` tag
-additionally publishes `X.Y.Z` and `X.Y`. Both multi-arch (`amd64`, `arm64`)
-and both the image and the bare binaries (as a workflow artifact) are built
-from the same commit.
+Pushing to `main` publishes a rolling `edge` prerelease plus the `latest`
+image. Pushing a `vX.Y.Z` tag publishes a real release, `X.Y.Z` and `X.Y`
+images, and the same binaries. Both multi-arch images (`amd64`, `arm64`) and
+the bare binaries are built from the same commit, and the binaries carry a
+`SHA256SUMS` alongside them.
 
 ## Agent
 
 ```shell
-./deploy/client/install.sh --url https://probe.example.com --token <token>
+curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
+  | sh -s -- --url https://probe.example.com --token <token>
 ```
 
-The installer copies the binary into place, then picks a supervision mechanism
-by what the host actually has:
+One line per host, needing only `curl` or `wget` — no repository, no Go, and
+by default no root. The installer downloads the release asset for the host's
+architecture, puts it in place, then picks a supervision mechanism by what the
+host actually has:
 
 | Method | Detected when | Survives logout | Survives reboot |
 | --- | --- | --- | --- |
@@ -113,6 +119,11 @@ by what the host actually has:
 | `procd` | OpenWrt / iStoreOS, as root | yes | yes |
 | `tmux` | `tmux` is present | yes | no |
 | `nohup` | nothing else | no | no |
+
+`--version` picks the release: `edge` (default, the rolling build of `main`),
+`latest`, or a pinned `v1.2.3`. `--base-url` points at a mirror instead of
+GitHub. A binary sitting next to the script is preferred over downloading, so
+a clone or an offline bundle still works.
 
 `systemd-user` is preferred because it needs no root at all: the unit lands in
 `~/.config/systemd/user/`, with its own `EnvironmentFile` at mode 600 and a
@@ -125,8 +136,13 @@ On OpenWrt there is no systemd, so it writes an `/etc/init.d/needle-client`
 procd script and enables it.
 
 ```shell
-./deploy/client/install.sh --url ... --token ... --method auto   # default
-./deploy/client/install.sh --uninstall
+# force a method instead of detecting one
+curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
+  | sh -s -- --url https://probe.example.com --token <token> --method tmux
+
+# remove the service and the binary
+curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
+  | sh -s -- --uninstall
 ```
 
 The agent takes `--url`, `--token`, `--interval` (default `30s`) and `--once`,
@@ -204,12 +220,13 @@ store, and changing either credential invalidates existing sessions.
 ## Tests
 
 ```shell
-./.toolchain/go/bin/go test ./...
+./scripts/bootstrap-go.sh && ./.toolchain/go/bin/go test ./...
 ```
 
-They cover the parts where a mistake is silent: tier rollup arithmetic and
-idempotence, open-bucket handling, pruning, gap filling, range parsing, and
-the session and agent-token checks.
+CI runs the same suite with `-race`, plus `gofmt` and `go vet`, on every push.
+The tests cover the parts where a mistake is silent: tier rollup arithmetic
+and idempotence, open-bucket handling, pruning, gap filling, range parsing,
+and the session and agent-token checks.
 
 ## Non-goals
 
