@@ -1,0 +1,8 @@
+/.toolchain/
+/dist/
+*.db
+*.db-wal
+*.db-shm
+.volumes/
+
+.playwright-mcp/

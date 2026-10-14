@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>needle</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/vendor/uPlot.min.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="/">needle</a>
+  <nav class="crumbs" id="crumbs"></nav>
+  <div class="top-right">
+    <span class="muted" id="refresh-note"></span>
+    <button class="ghost" id="logout" title="Sign out">Sign out</button>
+  </div>
+</header>
+
+<main id="main"></main>
+
+<footer class="foot">
+  <span id="stats" class="muted"></span>
+</footer>
+
+<script src="/vendor/uPlot.iife.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

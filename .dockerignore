@@ -1,0 +1,11 @@
+# Keep the build context small: the toolchain alone is hundreds of megabytes
+# and none of it belongs in the image.
+.toolchain/
+dist/
+deploy/.volumes/
+.git/
+*.db
+*.db-wal
+*.db-shm
+playwright-report/
+.playwright-mcp/

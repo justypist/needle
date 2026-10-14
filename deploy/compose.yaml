@@ -1,0 +1,51 @@
+# needle-server, deployed as a container.
+#
+# The image is built and published by GitHub Actions on every push to main:
+#
+#   ghcr.io/justypist/needle:latest    newest build of main
+#   ghcr.io/justypist/needle:1.2.3     a tagged release
+#   ghcr.io/justypist/needle:sha-abc12 a specific commit
+#
+# Pin NEEDLE_TAG to anything other than `latest` if you would rather deploy a
+# fixed version than track main. Nothing here needs the source tree.
+services:
+  needle:
+    image: ghcr.io/justypist/needle:${NEEDLE_TAG:-latest}
+    pull_policy: always
+    container_name: needle
+    restart: unless-stopped
+    pids_limit: 256
+    mem_limit: 256m
+    cpus: 1.0
+    # A read-only root filesystem plus a writable /data volume: the process
+    # cannot write anywhere else, by construction.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - public
+    volumes:
+      - data:/data
+    environment:
+      - TZ=Asia/Shanghai
+      - NEEDLE_ADDR=:8080
+      - NEEDLE_DB=/data/needle.db
+      - NEEDLE_AGENT_TOKEN=${NEEDLE_AGENT_TOKEN:?set NEEDLE_AGENT_TOKEN in .env}
+      - NEEDLE_PASSWORD=${NEEDLE_PASSWORD:?set NEEDLE_PASSWORD in .env}
+      - NEEDLE_SESSION_SECRET=${NEEDLE_SESSION_SECRET:-}
+      - NEEDLE_SECURE_COOKIES=true
+    labels:
+      caddy: ${NEEDLE_DOMAIN:?set NEEDLE_DOMAIN in .env}
+      caddy.import: tls-typist-cc
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+
+networks:
+  public:
+    external: true
+
+volumes:
+  data:
