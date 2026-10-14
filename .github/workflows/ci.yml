@@ -138,13 +138,17 @@ jobs:
             type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
+      # Both targets are always built, pull request or not: the cross-compile
+      # in the Dockerfile is exactly what a pull request should be checking.
+      # Only the push is gated. Otherwise every pull request leaves a
+      # ghcr.io/...:sha-<commit> tag behind that no deployment ever pulls.
       - name: build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           target: runtime
           platforms: linux/amd64,linux/arm64
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
