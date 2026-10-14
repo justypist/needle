@@ -53,7 +53,7 @@ meant to run as a container in any case.
 ## Server
 
 The server ships as a container only. Images are built and published by
-GitHub Actions; nothing is compiled on the deployment host.
+GitHub Actions, so the deployment host needs nothing but docker.
 
 | Image tag | Meaning |
 | --- | --- |
@@ -61,28 +61,81 @@ GitHub Actions; nothing is compiled on the deployment host.
 | `ghcr.io/justypist/needle:1.2.3` | a tagged release |
 | `ghcr.io/justypist/needle:sha-abc1234` | one specific commit |
 
-```shell
-curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/install-server.sh \
-  | sh -s -- --dest ~/.compose/needle --domain needle.dev.typist.cc
+There is no installer: drop the two files below into a directory, fill in the
+credentials, and start it. `openssl rand -hex 32` makes a good token.
+
+`compose.yaml`:
+
+```yaml
+services:
+  needle:
+    image: ghcr.io/justypist/needle:latest
+    pull_policy: always
+    container_name: needle
+    restart: unless-stopped
+    pids_limit: 256
+    mem_limit: 256m
+    cpus: 1.0
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - public
+    volumes:
+      - data:/data
+    environment:
+      - TZ=Asia/Shanghai
+      - NEEDLE_ADDR=:8080
+      - NEEDLE_DB=/data/needle.db
+      - NEEDLE_AGENT_TOKEN=${NEEDLE_AGENT_TOKEN:?set it in .env}
+      - NEEDLE_PASSWORD=${NEEDLE_PASSWORD:?set it in .env}
+      - NEEDLE_SESSION_SECRET=${NEEDLE_SESSION_SECRET:-}
+      - NEEDLE_SECURE_COOKIES=true
+    labels:
+      caddy: ${NEEDLE_DOMAIN:?set it in .env}
+      caddy.import: tls-typist-cc
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+
+networks:
+  public:
+    external: true
+
+volumes:
+  data:
 ```
 
-The installer fetches `compose.yaml` and the `backup.sh` / `restore.sh` pair,
-writes a `.env` with freshly generated credentials, and pulls and starts the
-container. It needs only `curl` and `docker`. Re-running it refreshes
-`compose.yaml` and keeps the existing `.env`, so it is also the update path.
-`--no-start` assembles without starting; `--tag 1.2.3` pins a version instead
-of tracking `latest`.
+`.env`:
 
-Run it from a clone instead and it uses the files on disk: `./deploy/install-server.sh ...`.
+```shell
+NEEDLE_DOMAIN=needle.example.com
+NEEDLE_AGENT_TOKEN=
+NEEDLE_PASSWORD=
+NEEDLE_SESSION_SECRET=
+```
+
+```shell
+docker compose up -d
+```
+
+Leave `NEEDLE_SESSION_SECRET` empty and it is derived from the other two,
+which means changing the password logs every session out. `NEEDLE_SECURE_COOKIES=true`
+marks the session cookie `Secure`, so this must sit behind TLS or logins will
+silently fail.
+
+The `caddy.*` labels are for a caddy running `caddy-docker-proxy` on the
+`public` network; see `deploy/compose.yaml` for the annotated version of this
+file. Delete those labels if you terminate TLS elsewhere, and change the
+network name if yours differs. The `caddy.import` line refers to a snippet
+defined in that caddy's own Caddyfile — replace it with your TLS stanza, or
+drop it if your caddy does ACME by default.
 
 The container runs from a `scratch` image as uid 65534, with `read_only: true`,
 `cap_drop: ALL`, `no-new-privileges` and a writable `/data` volume as its only
-filesystem. `NEEDLE_SECURE_COOKIES=true` marks the session cookie `Secure`,
-so serve it behind TLS or logins will silently fail.
-
-Caddy picks the service up from container labels (`caddy`, `caddy.import`,
-`caddy.reverse_proxy`), so no reverse-proxy configuration is needed beyond a
-caddy instance watching the `public` network.
+filesystem.
 
 | Environment variable | Meaning |
 | --- | --- |
@@ -92,6 +145,26 @@ caddy instance watching the `public` network.
 | `NEEDLE_PASSWORD` | dashboard password; empty disables dashboard auth |
 | `NEEDLE_SESSION_SECRET` | cookie signing key; derived from the two above when unset |
 | `NEEDLE_SECURE_COOKIES` | mark the session cookie `Secure` |
+
+### Backups
+
+`/data` holds one SQLite database, and a consistent copy of it is all a backup
+needs:
+
+```shell
+docker compose ps needle                                     # is it running?
+docker run --rm -v needle_data:/data -v "$PWD":/backup alpine:3.20 sh -c \
+  'apk add --no-cache sqlite >/dev/null && sqlite3 /data/needle.db ".backup /backup/needle.db"'
+```
+
+The `alpine` image has no `sqlite3`, hence the `apk add`; any container with
+the binary will do. Copying `needle.db` while the server runs would capture a
+torn WAL, so use `.backup` as above or stop the container first. The
+`needle.db-wal` and `needle.db-shm` files need not be kept.
+
+If you keep services under `~/.compose`, `~/.compose/.backup/new-service.sh needle`
+generates the `backup.sh` / `restore.sh` pair the rest of that directory uses,
+and the global `compose-backup.timer` picks it up from there.
 
 ### Releases
 

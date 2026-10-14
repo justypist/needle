@@ -120,8 +120,13 @@ func parseFlags(args []string) (config, error) {
 	fs.BoolVar(&cfg.insecure, "insecure", false, "skip TLS verification (testing only)")
 	fs.BoolVar(&cfg.once, "once", false, "collect and report a single sample, then exit")
 	fs.BoolVar(&cfg.verbose, "v", false, "verbose logging")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
+	}
+	if *showVersion {
+		fmt.Println("needle-client", version)
+		os.Exit(0)
 	}
 	cfg.url = strings.TrimRight(cfg.url, "/")
 	return cfg, nil

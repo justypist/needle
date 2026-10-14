@@ -159,8 +159,13 @@ func parseFlags(args []string) (config, error) {
 	fs.BoolVar(&cfg.secureCookies, "secure-cookies", cfg.secureCookies, "mark the session cookie Secure (set behind HTTPS)")
 	fs.DurationVar(&cfg.rollupEvery, "rollup-every", cfg.rollupEvery, "aggregate and prune interval")
 	fs.BoolVar(&cfg.verbose, "v", false, "verbose logging")
+	showVersion := fs.Bool("version", false, "print the version and exit")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
+	}
+	if *showVersion {
+		fmt.Println("needle-server", version)
+		os.Exit(0)
 	}
 	if !strings.Contains(cfg.addr, ":") {
 		cfg.addr = ":" + cfg.addr
