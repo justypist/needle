@@ -1,13 +1,21 @@
 #!/bin/sh
 # needle-client one-shot installer.
 #
-# Drops the agent at a fixed path, picks whichever supervision mechanism the
-# host actually has, and starts it. Designed for the whole fleet: Debian
-# boxes with systemd, OpenWrt routers with procd, and hosts with neither.
+# Fetches the agent binary, drops it at a fixed path, picks whichever
+# supervision mechanism the host actually has, and starts it. Designed for the
+# whole fleet: Debian boxes with systemd, OpenWrt routers with procd, and hosts
+# with neither. Needs only curl or wget; no repository, no Go, no root.
 #
-#   ./install.sh --url https://probe.example.com --token <token>
+#   curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
+#     | sh -s -- --url https://probe.example.com --token <token>
+#
 #   ./install.sh --url ... --token ... --method tmux
 #   ./install.sh --uninstall
+#
+# The binary comes from a GitHub release, by default the rolling `edge` build
+# of main. Pin a version with --version v1.2.3, or point --base-url elsewhere.
+# If a needle-client binary sits next to this script it is used instead, which
+# is what the offline path does.
 #
 # Method is detected in this order unless --method says otherwise:
 #
@@ -24,13 +32,23 @@ UNIT_NAME="needle-client"
 PROCD_NAME="needle-client"
 SESSION="needle-client"
 
-SRC_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="${NEEDLE_REPO:-justypist/needle}"
+VERSION="${NEEDLE_VERSION:-edge}"
+
+# $0 is unreliable when this runs as `curl ... | sh`, so resolve the script
+# directory only when it actually came from a file.
+SRC_DIR=""
+case "${0:-}" in
+  ""|-|sh|dash|bash) ;;
+  *) [ -f "$0" ] && SRC_DIR="$(cd "$(dirname "$0")" && pwd)" ;;
+esac
 
 URL="${NEEDLE_URL:-}"
 TOKEN="${NEEDLE_TOKEN:-}"
 INTERVAL="${NEEDLE_INTERVAL:-30s}"
 METHOD="${NEEDLE_METHOD:-auto}"
 BIN="${NEEDLE_BIN:-}"
+BASE_URL="${NEEDLE_BASE_URL:-}"
 UNINSTALL=0
 VERBOSE=0
 
@@ -47,12 +65,14 @@ usage: $0 --url <server> --token <token> [options]
   --interval <dur>   report interval (default 30s)
   --method <m>       systemd-user | procd | tmux | nohup | auto (default auto)
   --bin <path>       install path for the binary
+  --version <v>      release to download: edge, latest, or v1.2.3 (default edge)
+  --base-url <url>   download root, e.g. a self-hosted mirror
   --uninstall        stop and remove the agent
   -v                 verbose
   -h, --help         this message
 
 Environment equivalents: NEEDLE_URL, NEEDLE_TOKEN, NEEDLE_INTERVAL,
-NEEDLE_METHOD, NEEDLE_BIN.
+NEEDLE_METHOD, NEEDLE_BIN, NEEDLE_VERSION, NEEDLE_BASE_URL, NEEDLE_REPO.
 EOF
 }
 
@@ -63,6 +83,8 @@ while [ $# -gt 0 ]; do
     --interval) INTERVAL="${2:-}"; shift 2 ;;
     --method) METHOD="${2:-}"; shift 2 ;;
     --bin) BIN="${2:-}"; shift 2 ;;
+    --version) VERSION="${2:-}"; shift 2 ;;
+    --base-url) BASE_URL="${2:-}"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
     -v|--verbose) VERBOSE=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -136,20 +158,54 @@ arch_tag() {
   esac
 }
 
-find_binary() {
-  # 1) an explicit path next to this script
+# local_binary looks for a build we can install without touching the network.
+# Tried before any download so the offline path keeps working.
+local_binary() {
+  [ -n "$SRC_DIR" ] || return 1
   for cand in \
     "$SRC_DIR/$BIN_NAME" \
     "$SRC_DIR/${BIN_NAME}-linux-$(arch_tag)" \
     "$SRC_DIR/../dist/${BIN_NAME}-linux-$(arch_tag)" \
     "$SRC_DIR/../dist/$BIN_NAME"; do
-    if [ -f "$cand" ]; then echo "$cand"; return; fi
-  done
-  # 2) one already installed
-  for cand in "$DEFAULT_USER_BIN" "$DEFAULT_BIN"; do
-    if [ -x "$cand" ]; then echo "$cand"; return; fi
+    if [ -f "$cand" ]; then echo "$cand"; return 0; fi
   done
   return 1
+}
+
+# installed_binary is the last resort: an agent is already on this host, so
+# re-running the installer can still rewrite the service definition.
+installed_binary() {
+  for cand in "$DEFAULT_USER_BIN" "$DEFAULT_BIN"; do
+    if [ -x "$cand" ]; then echo "$cand"; return 0; fi
+  done
+  return 1
+}
+
+fetch() { # url dest
+  if have curl; then
+    curl -fsSL --retry 3 --connect-timeout 15 -o "$2" "$1"
+  elif have wget; then
+    wget -q -O "$2" "$1"
+  else
+    die "neither curl nor wget is available"
+  fi
+}
+
+# download_binary writes the release asset to $1. The asset names come from
+# scripts/build.sh: needle-client-linux-<arch>.
+download_binary() {
+  local dest="$1" url
+  if [ -n "$BASE_URL" ]; then
+    url="${BASE_URL%/}/$BIN_NAME-linux-$(arch_tag)"
+  else
+    url="https://github.com/$REPO/releases/download/$VERSION/$BIN_NAME-linux-$(arch_tag)"
+  fi
+  log "downloading $url"
+  mkdir -p "$(dirname "$dest")"
+  # Download beside the target and rename, so an interrupted transfer cannot
+  # leave a truncated binary where a service would exec it.
+  fetch "$url" "$dest.part" || die "download failed: $url"
+  mv -f "$dest.part" "$dest"
 }
 
 # --------------------------------------------------------------------------
@@ -331,18 +387,28 @@ fi
 [ -n "$TOKEN" ] || die "--token is required (or set NEEDLE_TOKEN)"
 
 BIN="$(pick_bin_path)"
-SRC="$(find_binary)" || die "no $BIN_NAME binary found next to this script or in dist/; build it first (scripts/build.sh)"
+mkdir -p "$(dirname "$BIN")"
 
 log "method: $METHOD"
 log "binary: $BIN"
 
-# Copy into place unless the source already is the destination.
-if [ "$SRC" != "$BIN" ]; then
-  mkdir -p "$(dirname "$BIN")"
-  tmp="$BIN.tmp.$$"
-  cp "$SRC" "$tmp"
-  chmod 755 "$tmp"
-  mv -f "$tmp" "$BIN"
+# Prefer a local build, then the network, then whatever is already installed.
+# A download lands straight at $BIN; a local copy goes through a temp file
+# beside it so the swap is atomic.
+if SRC="$(local_binary)"; then
+  if [ "$SRC" != "$BIN" ]; then
+    tmp="$BIN.tmp.$$"
+    cp "$SRC" "$tmp"
+    chmod 755 "$tmp"
+    mv -f "$tmp" "$BIN"
+    log "installed from local $SRC"
+  fi
+elif download_binary "$BIN"; then
+  chmod 755 "$BIN"
+else
+  warn "could not download $VERSION; falling back to an already installed agent"
+  installed_binary >/dev/null || die "no $BIN_NAME available: download failed and none is installed"
+  BIN="$(installed_binary)"
 fi
 
 case "$METHOD" in

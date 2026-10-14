@@ -1,17 +1,22 @@
-#!/bin/bash
-# Assemble a needle-server deployment directory.
+#!/bin/sh
+# needle-server deployment installer.
 #
-# The image comes from GHCR, built and published by GitHub Actions, so this
-# host needs no source tree, no Go and no local build. What lands in the
-# destination is a compose root that follows the ~/.compose convention:
-# compose.yaml, .env, and the backup.sh / restore.sh pair.
+# Assembles a deployment directory from the files published in the repository
+# and starts it: compose.yaml, the backup/restore pair, and a .env with fresh
+# credentials. Needs only curl or wget and docker; no repository checkout, no
+# Go, no build. The server image itself comes from GHCR.
 #
-#   ./install-server.sh --dest ~/.compose/needle --domain needle.dev.typist.cc
+#   curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/install-server.sh \
+#     | sh -s -- --dest ~/.compose/needle --domain needle.dev.typist.cc
 #
-# Re-run it to update the compose file; the existing .env is preserved.
-set -euo pipefail
+# Re-running it refreshes compose.yaml and keeps the existing .env, so it
+# doubles as the update path.
+set -eu
 
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="${NEEDLE_REPO:-justypist/needle}"
+REF="${NEEDLE_REF:-main}"
+RAW_BASE="${NEEDLE_RAW_BASE:-}"
+
 DEST="${NEEDLE_DEST:-}"
 DOMAIN="${NEEDLE_DOMAIN:-}"
 TOKEN="${NEEDLE_AGENT_TOKEN:-}"
@@ -25,6 +30,18 @@ log()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31m[fail]\033[0m %s\n' "$*" >&2; exit 1; }
 
+have() { command -v "$1" >/dev/null 2>&1; }
+
+fetch() { # url dest
+  if have curl; then
+    curl -fsSL --retry 3 --connect-timeout 15 -o "$2" "$1"
+  elif have wget; then
+    wget -q -O "$2" "$1"
+  else
+    die "neither curl nor wget is available"
+  fi
+}
+
 usage() {
   cat <<'EOF'
 usage: install-server.sh --dest <dir> --domain <host> [options]
@@ -33,7 +50,7 @@ usage: install-server.sh --dest <dir> --domain <host> [options]
   --domain <host>    public hostname, e.g. needle.dev.typist.cc (required)
   --token <token>    agent token; generated when omitted
   --password <pw>    dashboard password; prompted when omitted
-  --tag <tag>        image tag to deploy (default latest)
+  --tag <tag>        image tag to deploy: latest, or a version like 1.2.3
   --network <name>   docker network caddy watches (default public)
   --no-start         assemble only, do not run docker compose up
   -h, --help         this message
@@ -59,21 +76,69 @@ done
 
 [ -n "$DEST" ] || die "--dest is required"
 [ -n "$DOMAIN" ] || die "--domain is required"
-command -v docker >/dev/null 2>&1 || die "docker not found"
+have docker || die "docker not found"
+
+# A local checkout wins, so this script also works from a clone.
+SRC=""
+case "${0:-}" in
+  ""|-|sh|dash|bash) ;;
+  *) [ -f "$0" ] && SRC="$(cd "$(dirname "$0")" && pwd)" ;;
+esac
+
+# grab writes a published file to $2, preferring a local checkout.
+grab() { # path-in-repo dest
+  local rel="$1" dest="$2"
+  if [ -n "$SRC" ] && [ -f "$SRC/$rel" ]; then
+    cp "$SRC/$rel" "$dest"
+    return 0
+  fi
+  local url
+  if [ -n "$RAW_BASE" ]; then
+    url="${RAW_BASE%/}/$rel"
+  else
+    url="https://raw.githubusercontent.com/$REPO/$REF/$rel"
+  fi
+  fetch "$url" "$dest"
+}
 
 mkdir -p "$DEST"
 
 # --------------------------------------------------------------------------
-# 1) compose file, with the network name substituted in
+# 1) compose file and the backup/restore pair
 # --------------------------------------------------------------------------
-sed "s|^      - public$|      - $NETWORK|; s|^  public:$|  $NETWORK:|" \
-  "$SRC/deploy/compose.yaml" > "$DEST/compose.yaml"
+grab compose.yaml "$DEST/compose.yaml.part" || die "could not fetch compose.yaml"
+# The published compose file hardcodes the upstream network name; rewrite it
+# so --network works without shipping a templated copy.
+sed "s|^      - public\$|      - $NETWORK|; s|^  public:\$|  $NETWORK:|" \
+  "$DEST/compose.yaml.part" > "$DEST/compose.yaml"
+rm -f "$DEST/compose.yaml.part"
 log "wrote $DEST/compose.yaml (image tag: $TAG)"
+
+SVC="$(basename "$DEST")"
+for pair in "service-backup.sh:backup.sh" "service-restore.sh:restore.sh"; do
+  tmpl="${pair%%:*}"; out="${pair##*:}"
+  if grab "deploy/templates/$tmpl" "$DEST/$out.part"; then
+    sed "s|@@SVC@@|$SVC|g; s|@@VOLUME_SKIP@@||g; s|@@VOLUME_EXCLUDES@@||g" \
+      "$DEST/$out.part" > "$DEST/$out"
+    rm -f "$DEST/$out.part"
+    chmod +x "$DEST/$out"
+  else
+    warn "could not fetch $tmpl; skipping $out"
+  fi
+done
 
 # --------------------------------------------------------------------------
 # 2) credentials: keep whatever is already there
 # --------------------------------------------------------------------------
 ENV_FILE="$DEST/.env"
+random_hex() { # bytes
+  if have openssl; then
+    openssl rand -hex "$1"
+  else
+    head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
+  fi
+}
+
 if [ -f "$ENV_FILE" ]; then
   log "keeping existing .env"
   TOKEN="$(sed -n 's/^NEEDLE_AGENT_TOKEN=//p' "$ENV_FILE" | head -1)"
@@ -84,20 +149,18 @@ if [ -f "$ENV_FILE" ]; then
   [ -n "$TAG" ] || TAG=latest
 else
   if [ -z "$TOKEN" ]; then
-    TOKEN="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    TOKEN="$(random_hex 32)"
     log "generated an agent token"
   fi
   if [ -z "$PASSWORD" ]; then
     if [ -t 0 ]; then
-      read -r -s -p "dashboard password: " PASSWORD
-      echo
+      printf 'dashboard password: '
+      read -r PASSWORD
     fi
-    [ -n "$PASSWORD" ] || PASSWORD="$(openssl rand -hex 12 2>/dev/null || head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    [ -n "$PASSWORD" ] || PASSWORD="$(random_hex 12)"
     log "dashboard password: $PASSWORD"
   fi
-  if [ -z "$SESSION_SECRET" ]; then
-    SESSION_SECRET="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  fi
+  [ -n "$SESSION_SECRET" ] || SESSION_SECRET="$(random_hex 32)"
   umask 077
   cat > "$ENV_FILE" <<EOF
 NEEDLE_DOMAIN=$DOMAIN
@@ -109,33 +172,17 @@ EOF
   log "wrote $ENV_FILE"
 fi
 
-# --------------------------------------------------------------------------
-# 3) backup/restore, following the ~/.compose convention
-# --------------------------------------------------------------------------
-SVC="$(basename "$DEST")"
-for pair in "service-backup.sh:backup.sh" "service-restore.sh:restore.sh"; do
-  tmpl="${pair%%:*}"; out="${pair##*:}"
-  # The canonical templates live in ~/.compose/.backup; fall back to the copy
-  # shipped with this repo when installing somewhere else.
-  src=""
-  for cand in "$HOME/.compose/.backup/$tmpl" "$SRC/deploy/templates/$tmpl"; do
-    [ -f "$cand" ] && { src="$cand"; break; }
-  done
-  [ -n "$src" ] || continue
-  sed "s|@@SVC@@|$SVC|g; s|@@VOLUME_SKIP@@||g; s|@@VOLUME_EXCLUDES@@||g" "$src" > "$DEST/$out"
-  chmod +x "$DEST/$out"
-done
-
 log "deployment assembled at $DEST"
 
 # --------------------------------------------------------------------------
-# 4) pull and start
+# 3) pull and start
 # --------------------------------------------------------------------------
 if [ "$START" = 1 ]; then
   log "pulling and starting"
   ( cd "$DEST" && docker compose pull --quiet && docker compose up -d )
   log "server up. point an agent at it with:"
-  echo "    ./install.sh --url https://$DOMAIN --token $TOKEN"
+  echo "    curl -fsSL https://raw.githubusercontent.com/$REPO/$REF/deploy/client/install.sh \\"
+  echo "      | sh -s -- --url https://$DOMAIN --token $TOKEN"
 else
   log "skipped start (--no-start); run: cd $DEST && docker compose up -d"
 fi
