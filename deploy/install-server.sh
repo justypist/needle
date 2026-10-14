@@ -78,18 +78,25 @@ done
 [ -n "$DOMAIN" ] || die "--domain is required"
 have docker || die "docker not found"
 
-# A local checkout wins, so this script also works from a clone.
-SRC=""
+# A local checkout wins, so this script also works from a clone. ROOT is the
+# repository root when there is one; the paths below are all relative to it,
+# which is also how they appear in the published URLs.
+ROOT=""
 case "${0:-}" in
   ""|-|sh|dash|bash) ;;
-  *) [ -f "$0" ] && SRC="$(cd "$(dirname "$0")" && pwd)" ;;
+  *)
+    if [ -f "$0" ]; then
+      ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+      [ -d "$ROOT/deploy" ] || ROOT=""
+    fi
+    ;;
 esac
 
 # grab writes a published file to $2, preferring a local checkout.
-grab() { # path-in-repo dest
+grab() { # repo-relative path dest
   local rel="$1" dest="$2"
-  if [ -n "$SRC" ] && [ -f "$SRC/$rel" ]; then
-    cp "$SRC/$rel" "$dest"
+  if [ -n "$ROOT" ] && [ -f "$ROOT/$rel" ]; then
+    cp "$ROOT/$rel" "$dest"
     return 0
   fi
   local url
@@ -106,7 +113,7 @@ mkdir -p "$DEST"
 # --------------------------------------------------------------------------
 # 1) compose file and the backup/restore pair
 # --------------------------------------------------------------------------
-grab compose.yaml "$DEST/compose.yaml.part" || die "could not fetch compose.yaml"
+grab deploy/compose.yaml "$DEST/compose.yaml.part" || die "could not fetch compose.yaml"
 # The published compose file hardcodes the upstream network name; rewrite it
 # so --network works without shipping a templated copy.
 sed "s|^      - public\$|      - $NETWORK|; s|^  public:\$|  $NETWORK:|" \

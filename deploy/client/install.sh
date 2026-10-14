@@ -165,8 +165,11 @@ local_binary() {
   for cand in \
     "$SRC_DIR/$BIN_NAME" \
     "$SRC_DIR/${BIN_NAME}-linux-$(arch_tag)" \
+    "$SRC_DIR/dist/${BIN_NAME}-linux-$(arch_tag)" \
     "$SRC_DIR/../dist/${BIN_NAME}-linux-$(arch_tag)" \
-    "$SRC_DIR/../dist/$BIN_NAME"; do
+    "$SRC_DIR/../../dist/${BIN_NAME}-linux-$(arch_tag)" \
+    "$SRC_DIR/../dist/$BIN_NAME" \
+    "$SRC_DIR/../../dist/$BIN_NAME"; do
     if [ -f "$cand" ]; then echo "$cand"; return 0; fi
   done
   return 1
