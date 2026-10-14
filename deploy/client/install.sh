@@ -236,7 +236,7 @@ PROG="$bin"
 start_service() {
 	procd_open_instance
 	procd_set_param command "\$PROG"
-	procd_set_param env NEEDLE_URL=$URL NEEDLE_TOKEN=$TOKEN NEEDLE_INTERVAL=$INTERVAL
+	procd_set_param env "NEEDLE_URL=$URL" "NEEDLE_TOKEN=$TOKEN" "NEEDLE_INTERVAL=$INTERVAL"
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1
@@ -247,7 +247,8 @@ service_triggers() {
 	procd_add_reload_trigger "$PROCD_NAME"
 }
 EOF
-  chmod 755 "$script"
+  # 700, not 755: the script carries the agent token.
+  chmod 700 "$script"
   "$script" enable
   "$script" restart
   log "installed as a procd service: $script"

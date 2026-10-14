@@ -70,6 +70,9 @@ convention — then pulls and starts it. Re-running it updates the compose file
 and keeps the existing `.env`. `--no-start` assembles without starting, and
 `--tag` pins a version instead of tracking `latest`.
 
+To assemble by hand instead, copy `deploy/compose.yaml` and `deploy/.env.example`
+into the target directory, fill in the credentials, and run `docker compose up -d`.
+
 The container runs from a `scratch` image as uid 65534, with `read_only: true`,
 `cap_drop: ALL`, `no-new-privileges` and a writable `/data` volume as its only
 filesystem. `NEEDLE_SECURE_COOKIES=true` marks the session cookie `Secure`,
