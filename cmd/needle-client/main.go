@@ -114,7 +114,7 @@ func parseFlags(args []string) (config, error) {
 	}
 
 	fs := flag.NewFlagSet("needle-client", flag.ContinueOnError)
-	fs.StringVar(&cfg.url, "url", cfg.url, "server base url, e.g. https://probe.example.com")
+	fs.StringVar(&cfg.url, "url", cfg.url, "server base url, e.g. https://needle.example.com")
 	fs.StringVar(&cfg.token, "token", cfg.token, "agent token (NEEDLE_TOKEN)")
 	fs.DurationVar(&cfg.interval, "interval", cfg.interval, "report interval")
 	fs.BoolVar(&cfg.insecure, "insecure", false, "skip TLS verification (testing only)")

@@ -178,7 +178,7 @@ the bare binaries are built from the same commit, and the binaries carry a
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
-  | sh -s -- --url https://probe.example.com --token <token>
+  | sh -s -- --url https://needle.example.com --token <token>
 ```
 
 One line per host, needing only `curl` or `wget` — no repository, no Go, and
@@ -211,14 +211,14 @@ procd script and enables it.
 ```shell
 # force a method instead of detecting one
 curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
-  | sh -s -- --url https://probe.example.com --token <token> --method tmux
+  | sh -s -- --url https://needle.example.com --token <token> --method tmux
 
 # remove the service and the binary
 curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
   | sh -s -- --uninstall
 ```
 
-The agent takes `--url`, `--token`, `--interval` (default `30s`) and `--once`,
+The agent takes `--url`, `--token`, `--interval` (default `30s`) and `--once`,/resu 
 and reads `NEEDLE_URL` / `NEEDLE_TOKEN` / `NEEDLE_INTERVAL` from the
 environment. It caps its own heap at 32 MB.
 

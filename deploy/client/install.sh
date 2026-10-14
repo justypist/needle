@@ -7,7 +7,7 @@
 # with neither. Needs only curl or wget; no repository, no Go, no root.
 #
 #   curl -fsSL https://raw.githubusercontent.com/justypist/needle/main/deploy/client/install.sh \
-#     | sh -s -- --url https://probe.example.com --token <token>
+#     | sh -s -- --url https://needle.example.com --token <token>
 #
 #   ./install.sh --url ... --token ... --method tmux
 #   ./install.sh --uninstall
