@@ -1,6 +1,14 @@
 # Build stage. The whole Go module is compiled from source so the image does
 # not depend on a prebuilt binary existing on the build host.
-FROM golang:1.27-alpine AS build
+#
+# The toolchain runs on the build platform and cross-compiles for the target.
+# With CGO off the compiler needs no target libc, so it emits arm64 as cheaply
+# as amd64. Left to the default, buildx would instead run the arm64 toolchain
+# itself under QEMU, which costs about seven times as much.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -14,11 +22,18 @@ COPY web ./web
 COPY embed.go ./
 
 # CGO off keeps the result a true static binary, which is what lets the same
-# build run in a scratch-like image and on an OpenWrt box.
+# build run in a scratch-like image and on an OpenWrt box. It is also what
+# makes the cross-compile above possible: no target C toolchain is involved.
+# The cache mount survives source edits, so only the packages a commit really
+# touches are rebuilt; without it every build recompiles the SQLite engine.
 ENV CGO_ENABLED=0
 ARG VERSION=docker
-RUN go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
       -o /out/needle-server ./cmd/needle-server && \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
       -o /out/needle-client ./cmd/needle-client
 
